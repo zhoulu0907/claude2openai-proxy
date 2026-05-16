@@ -9,16 +9,16 @@ from fastapi.responses import JSONResponse, StreamingResponse
 import litellm
 import uuid
 import time
-from dotenv import load_dotenv
+from config import Config
 import sys
 from urllib.parse import urlparse
 
 # Load environment variables from .env file
-load_dotenv()
+Config.load()
 
 #litellm._turn_on_debug()
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-print("OPENAI_API_BASE:",os.environ.get("OPENAI_API_BASE","https://api.openai.com/v1"), flush=True)
+OPENAI_API_KEY = Config.OPENAI_API_KEY
+print("OPENAI_API_BASE:", Config.OPENAI_API_BASE, flush=True)
 
 # Configure logging
 logging.basicConfig(
@@ -27,17 +27,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Set Base URL
-BASE_URL = os.environ.get("BASE_URL")
-if BASE_URL:
-    parsed = urlparse(BASE_URL)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        logger.warning(f"Invalid BASE_URL ignored: {BASE_URL}")
-        BASE_URL = None
-    else:
-        if BASE_URL.endswith('/'):
-            BASE_URL = BASE_URL[:-1]
-        logger.warning(f"Using BASE_URL (external prefix): {BASE_URL}")
+BASE_URL = Config.BASE_URL
 
 # Configure uvicorn to be quieter
 import uvicorn
@@ -108,29 +98,16 @@ app.openapi = custom_openapi
 
 # Get model mapping configuration from environment
 # Default to latest OpenAI models if not set
-BIG_MODEL = os.environ.get("BIG_MODEL", "gpt-4.1")
-SMALL_MODEL = os.environ.get("SMALL_MODEL", "gpt-4.1-mini")
-MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "65535"))
+BIG_MODEL = Config.BIG_MODEL
+SMALL_MODEL = Config.SMALL_MODEL
+MAX_TOKENS = Config.MAX_TOKENS
 
 # Optional prefix-based mapping from env
-BIG_PREFIXES = [p.strip().lower() for p in os.environ.get("BIG_PREFIXES", "opus,sonnet").split(",") if p.strip()]
-SMALL_PREFIXES = [p.strip().lower() for p in os.environ.get("SMALL_PREFIXES", "haiku").split(",") if p.strip()]
+BIG_PREFIXES = Config.BIG_PREFIXES
+SMALL_PREFIXES = Config.SMALL_PREFIXES
 
 # List of OpenAI models
-OPENAI_MODELS = [
-    "o3-mini",
-    "o1",
-    "o1-mini",
-    "o1-pro",
-    "gpt-4.5-preview",
-    "gpt-4o",
-    "gpt-4o-audio-preview",
-    "chatgpt-4o-latest",
-    "gpt-4o-mini",
-    "gpt-4o-mini-audio-preview",
-    "gpt-4.1",  # Added default big model
-    "gpt-4.1-mini" # Added default small model
-]
+OPENAI_MODELS = Config.OPENAI_MODELS
 
 # Models for Anthropic API requests
 class ContentBlockText(BaseModel):
@@ -191,23 +168,7 @@ class MessagesRequest(BaseModel):
     @field_validator('model')
     def validate_model_field(cls, v, info):
         original_model = v
-        def map_model(name: str) -> str:
-            clean = name
-            if clean.startswith('anthropic/'):
-                clean = clean[10:]
-            elif clean.startswith('openai/'):
-                clean = clean[7:]
-            lower_clean = clean.lower()
-            if any(lower_clean.startswith(p) for p in SMALL_PREFIXES):
-                return f"openai/{SMALL_MODEL}"
-            if any(lower_clean.startswith(p) for p in BIG_PREFIXES):
-                return f"openai/{BIG_MODEL}"
-            if clean in OPENAI_MODELS and not name.startswith('openai/'):
-                return f"openai/{clean}"
-            if not name.startswith(('openai/', 'anthropic/')):
-                logger.debug(f"Model passthru: '{original_model}'.")
-            return name
-        new_model = map_model(v)
+        new_model = Config.map_model(v)
         values = info.data
         if isinstance(values, dict):
             values['original_model'] = original_model
@@ -225,23 +186,7 @@ class TokenCountRequest(BaseModel):
     @field_validator('model')
     def validate_model_token_count(cls, v, info):
         original_model = v
-        def map_model(name: str) -> str:
-            clean = name
-            if clean.startswith('anthropic/'):
-                clean = clean[10:]
-            elif clean.startswith('openai/'):
-                clean = clean[7:]
-            lower_clean = clean.lower()
-            if any(lower_clean.startswith(p) for p in SMALL_PREFIXES):
-                return f"openai/{SMALL_MODEL}"
-            if any(lower_clean.startswith(p) for p in BIG_PREFIXES):
-                return f"openai/{BIG_MODEL}"
-            if clean in OPENAI_MODELS and not name.startswith('openai/'):
-                return f"openai/{clean}"
-            if not name.startswith(('openai/', 'anthropic/')):
-                logger.debug(f"Model passthru: '{original_model}'.")
-            return name
-        new_model = map_model(v)
+        new_model = Config.map_model(v)
         values = info.data
         if isinstance(values, dict):
             values['original_model'] = original_model
@@ -1052,7 +997,7 @@ async def create_message(
         backend_headers = {}
         
         if incoming_x_api_key:
-            os.environ['OPENAI_API_KEY'] = incoming_x_api_key.strip()
+            Config.set_litellm_api_key(incoming_x_api_key.strip())
             backend_headers["Authorization"] = f"Bearer {incoming_x_api_key.strip()}"
         else:
             raise HTTPException(status_code=401, detail="Missing Authorization for OpenAI request")
@@ -1242,7 +1187,7 @@ async def create_message(
             
             # Convert LiteLLM response to Anthropic format
             anthropic_response = convert_litellm_to_anthropic(litellm_response, request)
-            os.environ['OPENAI_API_KEY'] = OPENAI_API_KEY
+            Config.set_litellm_api_key(OPENAI_API_KEY)
             return anthropic_response
                 
     except Exception as e:
@@ -1278,7 +1223,7 @@ async def create_message(
             error_message += f"\nResponse: {error_details['response']}"
         
         # Return detailed error
-        os.environ['OPENAI_API_KEY'] = OPENAI_API_KEY
+        Config.set_litellm_api_key(OPENAI_API_KEY)
         status_code = error_details.get('status_code', 500)
         raise HTTPException(status_code=status_code, detail=error_message)
 
@@ -1350,7 +1295,7 @@ async def count_tokens(
             )
             
             # Return Anthropic-style response
-            os.environ['OPENAI_API_KEY'] = OPENAI_API_KEY
+            Config.set_litellm_api_key(OPENAI_API_KEY)
             return TokenCountResponse(input_tokens=token_count)
             
         except ImportError:
@@ -1359,7 +1304,7 @@ async def count_tokens(
             return TokenCountResponse(input_tokens=1000)  # Default fallback
             
     except Exception as e:
-        os.environ['OPENAI_API_KEY'] = OPENAI_API_KEY
+        Config.set_litellm_api_key(OPENAI_API_KEY)
         import traceback
         error_traceback = traceback.format_exc()
         logger.error(f"Error counting tokens: {str(e)}\n{error_traceback}")
