@@ -4,13 +4,7 @@ services:
     image: claude-proxy
     container_name: claude-proxy
     ports:
-      - "8082:8082"
-    environment:
-      OPENAI_API_BASE: "http://127.0.0.1:4000/v1"
-      BASE_URL: "https://your.local.external.url/claude/"
-      BIG_MODEL: "gpt-4.1"
-      SMALL_MODEL: "gpt-4.1-mini"
-      MAX_TOKENS: "65535"
-      BIG_PREFIXES: "opus,sonnet"
-      SMALL_PREFIXES: "haiku"
+      - "${PORT:-8082}:8082"
+    env_file:
+      - .env
     restart: unless-stopped
